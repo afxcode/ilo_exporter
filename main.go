@@ -12,13 +12,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/MauveSoftware/ilo_exporter/pkg/chassis"
 	"github.com/MauveSoftware/ilo_exporter/pkg/client"
 	"github.com/MauveSoftware/ilo_exporter/pkg/manager"
 	"github.com/MauveSoftware/ilo_exporter/pkg/system"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -101,7 +103,22 @@ func startServer() {
 		return
 	}
 
-	logrus.Fatal(http.ListenAndServe(*listenAddress, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	signalQuit := make(chan os.Signal, 1)
+	signal.Notify(signalQuit, os.Interrupt, os.Kill, syscall.SIGTERM)
+	go func() {
+		<-signalQuit
+		cancel()
+	}()
+
+	go func() {
+		if err := http.ListenAndServe(*listenAddress, nil); err != nil {
+			logrus.Error("HTTP server error: %v", err)
+			cancel()
+		}
+	}()
+
+	<-ctx.Done()
 }
 
 func errorHandler(f func(http.ResponseWriter, *http.Request) error) http.HandlerFunc {
